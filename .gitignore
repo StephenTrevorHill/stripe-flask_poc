@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+instance/
+*.pyc
+*.sqlite
+*.db
+.env
+.mypy_cache/
+:i
+.pytest_cache/
+.migrations/
+.env.example
