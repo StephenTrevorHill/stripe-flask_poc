@@ -1,7 +1,9 @@
-import os
+import os  # noqa: F401
 from flask import Flask
 from .config import Config
 from .extensions import db, migrate, configure_logging
+from . import models  # noqa: F401
+
 from .webhooks.routes import webhooks_bp
 
 def create_app():

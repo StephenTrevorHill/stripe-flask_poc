@@ -1,12 +1,40 @@
-.venv/
+# --- Python ---
 __pycache__/
-instance/
 *.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# --- Virtual env ---
+.venv/
+env/
+venv/
+
+# --- Environment variables ---
+.env
+.env.*    # any environment-specific env files
+
+# --- Flask instance folder ---
+instance/
+
+# --- Local databases ---
 *.sqlite
 *.db
-.env
-.mypy_cache/
-:i
+
+# --- Test & coverage artifacts ---
 .pytest_cache/
-.migrations/
-.env.example
+.coverage
+htmlcov/
+.mypy_cache/
+
+# --- IDE / Editor settings ---
+.vscode/
+.idea/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Migrations ---
+# Keep migrations in Git to share schema history:
+# migrations/  <-- DO NOT ignore this folder
