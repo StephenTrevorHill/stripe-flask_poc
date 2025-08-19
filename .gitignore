@@ -9,6 +9,7 @@ __pycache__/
 .venv/
 env/
 venv/
+.envrc
 
 # --- Environment variables ---
 .env
@@ -38,3 +39,6 @@ Thumbs.db
 # --- Migrations ---
 # Keep migrations in Git to share schema history:
 # migrations/  <-- DO NOT ignore this folder
+
+# --- Dev Environment Throwaways ---
+work_here.sh
