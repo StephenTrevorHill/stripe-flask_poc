@@ -35,7 +35,6 @@ class Order(Base):
     status = Column(Enum(OrderStatus), nullable=False, default=OrderStatus.DRAFT)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
     payments = relationship("Payment", back_populates="order", lazy="selectin")
 
 class Payment(Base):
@@ -59,7 +58,18 @@ class Payment(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    order = relationship("Order", back_populates="payments", lazy="joined")
+    order = relationship(
+        "Order", 
+        back_populates="payments", 
+        lazy="joined"
+    )
+    events = relationship(
+        "PaymentEvent",
+        back_populates="payment",
+        lazy="selectin",   # load related events efficiently
+        cascade="all, delete-orphan"  # if payment is deleted, events go too
+    )
+
 
 class PaymentEvent(Base):
     __tablename__ = "payment_events"
@@ -70,3 +80,7 @@ class PaymentEvent(Base):
     payload = Column(Text, nullable=True)  # JSON string for cross-DB compatibility
     received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     payment_id = Column(String, ForeignKey("payments.id"), nullable=True)
+    payment = relationship(
+        "Payment", 
+        back_populates="events"
+        )
