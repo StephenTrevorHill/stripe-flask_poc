@@ -1,8 +1,14 @@
-import os, json, uuid
+# app/webhooks/routes.py
+
+# import os
+import json
+import uuid
 from flask import Blueprint, current_app, request, jsonify
 import stripe
 from ..extensions import db
-from ..models import Payment, PaymentEvent, PaymentStatus, Order
+from ..models import Payment, PaymentEvent, PaymentStatus, Order, OrderStatus
+from sqlalchemy import func
+
 
 webhooks_bp = Blueprint("webhooks", __name__)
 
@@ -142,13 +148,43 @@ def stripe_webhook():
         # Link event to payment
         pe.payment_id = payment.id
 
-        # If we can find the order, consider updating status
-        if payment.order_id and payment.status == PaymentStatus.SUCCEEDED:
+
+        # If linked to an order, recompute order status from all succeeded payments
+        if payment.order_id:
             order = Order.query.filter_by(id=payment.order_id).first()
             if order:
-                order.status = order.status or "PAID"
+                total_paid = _recompute_order_status(order)
+            current_app.logger.info(f"order {order.id}: total_paid={total_paid} / amount_due={order.amount_due} -> {order.status}"
+        )
+
+        # # If we can find the order, consider updating status
+        # if payment.order_id and payment.status == PaymentStatus.SUCCEEDED:
+        #     order = Order.query.filter_by(id=payment.order_id).first()
+        #     if order:
+        #         order.status = order.status or "PAID"
+
     else:
         current_app.logger.info(f"Unhandled or non-PI event type: {evt_type}")
 
     db.session.commit()
     return "", 200
+
+def _recompute_order_status(order):
+    """Recalculate order.status from all SUCCEEDED payments (minor units)."""
+    total_paid = (
+        db.session.query(func.coalesce(func.sum(Payment.amount_received), 0))
+        .filter(
+            Payment.order_id == order.id,
+            Payment.status == PaymentStatus.SUCCEEDED,
+        )
+        .scalar()
+    ) or 0
+
+    if total_paid == 0:
+        order.status = OrderStatus.AWAITING_PAYMENT
+    elif total_paid < (order.amount_due or 0):
+        order.status = OrderStatus.PARTIALLY_PAID
+    else:
+        order.status = OrderStatus.PAID
+
+    return total_paid
