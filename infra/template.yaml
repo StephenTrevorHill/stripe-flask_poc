@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda → SQS → Lambda with DynamoDB (staging/prod) – free tier
+
+Parameters:
+  Stage:
+    Type: String
+    Default: staging
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        TABLE_NAME: !Ref EventsTable
+
+Resources:
+  EventsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub events-${Stage}-dlq
+
+  EventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub events-${Stage}
+      VisibilityTimeout: 90            # ≈ 6× processor Lambda timeout (15s)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EventsDLQ.Arn
+        maxReceiveCount: 5
+
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub events-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: eventId
+          AttributeType: S
+        - AttributeName: tenantId
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: eventId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1_TenantCreatedAt
+          KeySchema:
+            - AttributeName: tenantId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [status, type]
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/handlers/
+      Handler: ingest.handler
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EventsQueue.QueueName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref EventsQueue    # Ref on SQS returns QueueUrl
+          STRIPE_WEBHOOK_SECRET: !Sub '{{resolve:ssm:/app/${Stage}/STRIPE_SECRET:1}}'
+      Events:
+        Webhook:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: POST
+
+  ProcessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/handlers/
+      Handler: process.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+      Events:
+        FromSQS:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EventsQueue.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures   # enable partial batch response
+
+Outputs:
+  ApiEndpoint:
+    Description: Invoke URL for POST /webhook
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook'

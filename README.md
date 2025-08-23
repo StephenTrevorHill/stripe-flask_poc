@@ -1,55 +1,27 @@
-# Stripe Webhook POC (Flask)
+# AWS Lambda → SQS → Lambda POC (staging + prod)
 
-A minimal, production-leaning Flask project that receives Stripe webhooks, verifies signatures, and upserts payment data with idempotency. Includes:
-- App factory + blueprints
-- SQLAlchemy models
-- Flask-Migrate (Alembic) wiring
-- Pytest with an idempotency test
-- Local dev defaults (SQLite) and easy migration to Postgres
+Minimal free‑tier stack for a Stripe test webhook POC.
+Local dev = unit tests only. Integration tests run in `staging`.
 
-## Quick start (local)
+## Quickstart
 
-1. **Python env**
+1) Create a venv and run tests locally:
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-2. **Env vars**
-Copy `.env.example` to `.env` and fill in your Stripe keys:
-```bash
-cp .env.example .env
-# edit .env
-```
-
-3. **DB setup (SQLite)**
-```bash
-flask db init
-flask db migrate -m "init"
-flask db upgrade
-```
-
-4. **Run app**
-```bash
-# runs on http://127.0.0.1:5000
-flask --app wsgi run
-```
-
-5. **Stripe CLI (local forwarding)**
-```bash
-stripe login
-stripe listen --forward-to localhost:5000/webhooks/stripe
-stripe trigger payment_intent.succeeded
-```
-
-6. **Run tests**
-```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest -q
 ```
 
-## Notes
-- Idempotency: We store `stripe_event_id` uniquely in `payment_events`. Duplicate deliveries return 200 without double-writing business rows.
-- Amounts are stored in **minor units** (cents).
-- To link Orders and Payments, supply `metadata={"order_id": "<your-order-id>"}` when creating PaymentIntents / Checkout Sessions.
-- For Postgres: set `SQLALCHEMY_DATABASE_URI` accordingly (e.g., `postgresql+psycopg://...`) and run migrations again.
+2) Set Stripe secret in SSM (staging) and deploy:
+```bash
+aws ssm put-parameter --name /app/staging/STRIPE_SECRET --type SecureString --value whsec_XXXX --overwrite
+sam build -t infra/template.yaml
+sam deploy --guided --stack-name webhook-staging --parameter-overrides Stage=staging --capabilities CAPABILITY_IAM
+```
+
+3) Copy the API endpoint from stack outputs and configure a Stripe **test** webhook to POST there, then send a test event.
+
+Notes:
+- No VPC/NAT/ALB; stays inside free tiers.
+- DynamoDB table key: `eventId` (Stripe event id), with GSI on `tenantId` + `createdAt`.
+- Logs go to CloudWatch via stdout.
