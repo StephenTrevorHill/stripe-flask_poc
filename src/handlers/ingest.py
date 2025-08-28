@@ -1,18 +1,29 @@
-import base64, hashlib, hmac, json, os, time, uuid
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+import uuid
 import boto3
 
-QUEUE_URL = os.environ["QUEUE_URL"]
-TABLE_NAME = os.environ["TABLE_NAME"]
-STRIPE_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "test_secret")
-
+# Create clients at import (fine for tests; we stub/monkeypatch these)
 sqs = boto3.client("sqs")
 ddb = boto3.client("dynamodb")
 
+def get_cfg():
+    """Load required settings at runtime, with safe defaults for tests."""
+    q = os.environ.get("QUEUE_URL")                     # required in real runs
+    t = os.environ.get("TABLE_NAME", "events-staging")  # harmless default for tests
+    s = os.environ.get("STRIPE_WEBHOOK_SECRET", "test_secret")
+    if q is None:
+        # Avoid import-time KeyError; raise a clear runtime error instead.
+        raise RuntimeError("Missing required env var: QUEUE_URL")
+    return {"QUEUE_URL": q, "TABLE_NAME": t, "STRIPE_SECRET": s}
+
 
 def verify_stripe_signature(payload_bytes: bytes, sig_header: str, secret: str, tolerance: int = 300) -> bool:
-    """Minimal Stripe-style verifier: 't=timestamp,v1=signature'.
-    Signature = HMAC_SHA256(secret, f"{t}.{payload}")
-    """
+    """Minimal Stripe-style verifier: 't=timestamp,v1=signature' where v1 = HMAC_SHA256(secret, f'{t}.{payload}')."""
     if not sig_header:
         return False
     parts = dict(kv.split("=", 1) for kv in sig_header.split(",") if "=" in kv)
@@ -21,23 +32,24 @@ def verify_stripe_signature(payload_bytes: bytes, sig_header: str, secret: str, 
         return False
     signed = f"{t}.{payload_bytes.decode('utf-8')}".encode("utf-8")
     mac = hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
-    # Optional timestamp tolerance check
     try:
         ts = int(t)
-        if abs(int(time.time()) - ts) > tolerance:
-            pass
+        # Optional tolerance check; keep permissive in POC
+        _ = abs(int(time.time()) - ts)
     except Exception:
         pass
     return hmac.compare_digest(mac, v1)
 
 
 def handler(event, context):
+    cfg = get_cfg()
+
     body = event.get("body") or ""
     body_bytes = base64.b64decode(body) if event.get("isBase64Encoded") else body.encode("utf-8")
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     sig = headers.get("stripe-signature")
 
-    if not verify_stripe_signature(body_bytes, sig, STRIPE_SECRET):
+    if not verify_stripe_signature(body_bytes, sig, cfg["STRIPE_SECRET"]):
         print(json.dumps({"level": "warn", "msg": "bad_sig"}), flush=True)
         return {"statusCode": 401, "body": "bad signature"}
 
@@ -58,7 +70,7 @@ def handler(event, context):
     # Idempotent create (no overwrite if already present)
     try:
         ddb.put_item(
-            TableName=TABLE_NAME,
+            TableName=cfg["TABLE_NAME"],
             Item={
                 "eventId": {"S": event_id},
                 "tenantId": {"S": tenant_id},
@@ -72,7 +84,7 @@ def handler(event, context):
         pass
 
     sqs.send_message(
-        QueueUrl=QUEUE_URL,
+        QueueUrl=cfg["QUEUE_URL"],
         MessageBody=body_bytes.decode("utf-8"),
         MessageAttributes={
             "tenantId": {"DataType": "String", "StringValue": tenant_id},

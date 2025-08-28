@@ -1,4 +1,9 @@
-import json, hmac, hashlib, time, types, os
+import json
+import hmac
+import hashlib
+import time
+import types
+import os
 from src.handlers import ingest
 
 class FakeSQS:
@@ -27,9 +32,9 @@ def make_sig(payload: str, secret: str):
     return f"t={t},v1={v1}"
 
 def test_ingest_signature_and_enqueue(monkeypatch):
-    os.environ["TABLE_NAME"] = "events-staging"
-    os.environ["QUEUE_URL"] = "https://sqs.example/q"
-    os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
+    # os.environ["TABLE_NAME"] = TABLE_NAME
+    # os.environ["QUEUE_URL"] = QUEUE_URL
+    # os.environ["STRIPE_WEBHOOK_SECRET"] = STRIPE_WEBHOOK_SECRET
 
     sqs = FakeSQS(); ddb = FakeDDB()
     monkeypatch.setattr(ingest, "sqs", sqs)
@@ -45,9 +50,9 @@ def test_ingest_signature_and_enqueue(monkeypatch):
     assert sqs.sent and sqs.sent[0]["MessageBody"] == payload
 
 def test_ingest_bad_signature(monkeypatch):
-    os.environ["TABLE_NAME"] = "events-staging"
-    os.environ["QUEUE_URL"] = "https://sqs.example/q"
-    os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
+    # os.environ["TABLE_NAME"] = TABLE_NAME
+    # os.environ["QUEUE_URL"] = QUEUE_URL
+    # os.environ["STRIPE_WEBHOOK_SECRET"] = STRIPE_WEBHOOK_SECRET
 
     sqs = FakeSQS(); ddb = FakeDDB()
     monkeypatch.setattr(ingest, "sqs", sqs)

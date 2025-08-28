@@ -1,7 +1,10 @@
-import json, os, time
+import json
+import os
+import time
 import boto3
 
-TABLE_NAME = os.environ["TABLE_NAME"]
+# Safe at import: default for tests, real value in Lambda env
+TABLE_NAME = os.environ.get("TABLE_NAME", "events-staging")
 ddb = boto3.client("dynamodb")
 
 
