@@ -9,3 +9,5 @@ apply.sh
 .envrc
 app.db
 instance/app.db
+.env
+.envrc
