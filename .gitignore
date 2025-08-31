@@ -5,3 +5,7 @@ __pycache__/
 .DS_Store
 .env\n.envrc\n
 apply.sh
+.env
+.envrc
+app.db
+instance/app.db
