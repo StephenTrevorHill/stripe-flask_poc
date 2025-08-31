@@ -3,11 +3,14 @@ __pycache__/
 .pytest_cache/
 .aws-sam/
 .DS_Store
-.env\n.envrc\n
+
+# local scripts
 apply.sh
+
+# local env
 .env
 .envrc
+
+# local dbs
 app.db
 instance/app.db
-.env
-.envrc
