@@ -1,46 +1,245 @@
-import json
-from unittest.mock import patch
-from app.extensions import db
-from app.models import PaymentEvent, Payment, PaymentStatus
+import json, os, time
+import boto3
 
-def make_event(evt_id="evt_1", evt_type="payment_intent.succeeded", pi_id="pi_123", currency="usd", amount=1234):
-    return {
-        "id": evt_id,
-        "type": evt_type,
-        "data": {
-            "object": {
-                "id": pi_id,
-                "currency": currency,
-                "amount_received": amount,
-                "status": "succeeded",
-                "charges": {"data": []},
-                "metadata": {"order_id": "order_abc"},
-            }
-        }
+# Use a safe default for tests; Lambda will set TABLE_NAME in env
+TABLE_NAME = os.environ.get("TABLE_NAME", "events-staging")
+ddb = boto3.client("dynamodb")
+
+
+def _now_str():
+    return str(int(time.time()))
+
+
+def _get_tenant_and_created(payload: dict):
+    tenant = (
+        payload.get("account")
+        or (payload.get("data") or {}).get("object", {}).get("account")
+        or "demo"
+    )
+    created = str(payload.get("created") or int(time.time()))
+    return tenant, created
+
+
+def _int(v, default=0):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _amount_from_object(obj: dict, evt_type: str) -> int:
+    """Return amount in Stripe's smallest unit (already cents for USD)."""
+    # Prefer fields that clearly indicate money movement
+    if evt_type == "payment_intent.succeeded":
+        return _int(obj.get("amount_received") or obj.get("amount"))
+    if evt_type == "payment_intent.payment_failed":
+        return 0
+    if evt_type == "charge.refunded":
+        return -abs(_int(obj.get("amount_refunded") or obj.get("amount")))
+    # fallback
+    return _int(obj.get("amount_received") or obj.get("amount") or 0)
+
+
+def _mark_processed_once(payload: dict):
+    """Idempotency guard + basic metadata upsert. First caller wins; duplicates skip."""
+    event_id = payload.get("id")
+    if not event_id:
+        raise ValueError("missing id")
+    tenant, created = _get_tenant_and_created(payload)
+    now = _now_str()
+
+    ddb.update_item(
+        TableName=TABLE_NAME,
+        Key={"eventId": {"S": event_id}},
+        UpdateExpression=(
+            "SET #s = :s, processedAt = :t, #type = :type, "
+            "tenantId = :tenant, createdAt = :created"
+        ),
+        ConditionExpression="attribute_not_exists(processedAt)",
+        ExpressionAttributeNames={"#s": "status", "#type": "type"},
+        ExpressionAttributeValues={
+            ":s": {"S": "PROCESSED"},
+            ":t": {"S": now},
+            ":type": {"S": payload.get("type", "")},
+            ":tenant": {"S": tenant},
+            ":created": {"S": created},
+        },
+    )
+
+
+def _upsert_payment_summary(order_id: str, payment_id: str, status: str, amount_cents: int):
+    now = _now_str()
+    ddb.update_item(
+        TableName=TABLE_NAME,
+        Key={"eventId": {"S": f"payment#{payment_id}"}},
+        UpdateExpression=(
+            "SET entity=:e, orderId=:o, paymentId=:p, #s=:s, amountCents=:amt, lastUpdatedAt=:t"
+        ),
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":e": {"S": "PAYMENT"},
+            ":o": {"S": order_id},
+            ":p": {"S": payment_id},
+            ":s": {"S": status},
+            ":amt": {"N": str(int(amount_cents))},
+            ":t": {"S": now},
+        },
+    )
+
+
+def _bump_order_totals(order_id: str, delta_cents: int):
+    now = _now_str()
+    ddb.update_item(
+        TableName=TABLE_NAME,
+        Key={"eventId": {"S": f"order#{order_id}"}},
+        UpdateExpression="SET entity=:e, orderId=:o, lastUpdatedAt=:t ADD amountCents :d",
+        ExpressionAttributeValues={
+            ":e": {"S": "ORDER"},
+            ":o": {"S": order_id},
+            ":t": {"S": now},
+            ":d": {"N": str(int(delta_cents))},
+        },
+    )
+
+
+def _update_business_state(payload: dict):
+    evt_type = payload.get("type", "")
+    obj = (payload.get("data") or {}).get("object") or {}
+    order_id = (
+        (obj.get("metadata") or {}).get("order_id")
+        or obj.get("order_id")
+        or "unknown"
+    )
+    payment_id = obj.get("id") or obj.get("payment_intent") or "unknown"
+    amount_cents = _amount_from_object(obj, evt_type)
+
+    if evt_type == "payment_intent.succeeded":
+        _upsert_payment_summary(order_id, payment_id, "SUCCEEDED", amount_cents)
+        _bump_order_totals(order_id, amount_cents)
+    elif evt_type == "payment_intent.payment_failed":
+        _upsert_payment_summary(order_id, payment_id, "FAILED", 0)
+    elif evt_type == "charge.refunded":
+        _upsert_payment_summary(order_id, payment_id, "REFUNDED", -abs(amount_cents))
+        _bump_order_totals(order_id, amount_cents)  # amount_cents is negative here
+    else:
+        # No-op for unhandled types; still recorded by _mark_processed_once
+        pass
+
+
+def handler(event, context):
+    failures = []
+    for r in event.get("Records", []):
+        try:
+            payload = json.loads(r.get("body") or "{}")
+            # 1) Idempotency guard (duplicates will raise a ConditionalCheckFailedException)
+            try:
+                _mark_processed_once(payload)
+            except ddb.exceptions.ConditionalCheckFailedException:
+                continue  # already processed; skip silently
+
+            # 2) Business effects (summaries & totals)
+            _update_business_state(payload)
+
+        except Exception:
+            failures.append({"itemIdentifier": r.get("messageId")})
+    return {"batchItemFailures": failures}
+
+# --- appended business-logic tests ---
+import json
+from botocore.stub import Stubber, ANY
+from src.handlers import process
+
+
+def test_payment_intent_succeeded_updates_payment_and_order(monkeypatch):
+    # Freeze time for deterministic timestamps
+    monkeypatch.setattr(process.time, "time", lambda: 1700000000)
+
+    stubber = Stubber(process.ddb)
+
+    # 1) Idempotency/metadata upsert
+    stubber.add_response(
+        "update_item",
+        service_response={},
+        expected_params={
+            "TableName": process.TABLE_NAME,
+            "Key": {"eventId": {"S": "evt_123"}},
+            "UpdateExpression": (
+                "SET #s = :s, processedAt = :t, #type = :type, "
+                "tenantId = :tenant, createdAt = :created"
+            ),
+            "ConditionExpression": "attribute_not_exists(processedAt)",
+            "ExpressionAttributeNames": {"#s": "status", "#type": "type"},
+            "ExpressionAttributeValues": {
+                ":s": {"S": "PROCESSED"},
+                ":t": {"S": "1700000000"},
+                ":type": {"S": "payment_intent.succeeded"},
+                ":tenant": {"S": ANY},
+                ":created": {"S": ANY},
+            },
+        },
+    )
+
+    # 2) Payment summary upsert
+    stubber.add_response(
+        "update_item",
+        service_response={},
+        expected_params={
+            "TableName": process.TABLE_NAME,
+            "Key": {"eventId": {"S": "payment#pi_1"}},
+            "UpdateExpression": "SET entity=:e, orderId=:o, paymentId=:p, #s=:s, amountCents=:amt, lastUpdatedAt=:t",
+            "ExpressionAttributeNames": {"#s": "status"},
+            "ExpressionAttributeValues": {
+                ":e": {"S": "PAYMENT"},
+                ":o": {"S": "order_42"},
+                ":p": {"S": "pi_1"},
+                ":s": {"S": "SUCCEEDED"},
+                ":amt": {"N": "5000"},
+                ":t": {"S": "1700000000"},
+            },
+        },
+    )
+
+    # 3) Order total bump
+    stubber.add_response(
+        "update_item",
+        service_response={},
+        expected_params={
+            "TableName": process.TABLE_NAME,
+            "Key": {"eventId": {"S": "order#order_42"}},
+            "UpdateExpression": "SET entity=:e, orderId=:o, lastUpdatedAt=:t ADD amountCents :d",
+            "ExpressionAttributeValues": {
+                ":e": {"S": "ORDER"},
+                ":o": {"S": "order_42"},
+                ":t": {"S": "1700000000"},
+                ":d": {"N": "5000"},
+            },
+        },
+    )
+
+    payload = {
+        "id": "evt_123",
+        "type": "payment_intent.succeeded",
+        "created": 1700000000,
+        "data": {"object": {"id": "pi_1", "metadata": {"order_id": "order_42"}, "amount_received": 5000}},
     }
 
-@patch("stripe.Webhook.construct_event")
-def test_idempotent_processing(mock_construct, client, app):
-    # First delivery
-    event = make_event(evt_id="evt_A", pi_id="pi_A")
-    mock_construct.return_value = event
+    with stubber:
+        res = process.handler({"Records": [{"messageId": "m1", "body": json.dumps(payload)}]}, None)
+        assert res["batchItemFailures"] == []
 
-    resp = client.post("/webhooks/stripe", data=json.dumps(event), headers={"Stripe-Signature": "t=0,v1=deadbeef"})
-    assert resp.status_code == 200
 
-    with app.app_context():
-        assert db.session.query(PaymentEvent).count() == 1
-        assert db.session.query(Payment).count() == 1
-        p = db.session.query(Payment).first()
-        assert p.status == PaymentStatus.SUCCEEDED
-        assert p.stripe_payment_intent_id == "pi_A"
+def test_duplicate_event_is_skipped(monkeypatch):
+    stubber = Stubber(process.ddb)
 
-    # Duplicate delivery (same event id)
-    mock_construct.return_value = event
-    resp2 = client.post("/webhooks/stripe", data=json.dumps(event), headers={"Stripe-Signature": "t=0,v1=deadbeef"})
-    assert resp2.status_code == 200
+    stubber.add_client_error(
+        "update_item",
+        service_error_code="ConditionalCheckFailedException",
+        service_message="Already processed",
+        http_status_code=400,
+    )
 
-    with app.app_context():
-        # No additional rows
-        assert db.session.query(PaymentEvent).count() == 1
-        assert db.session.query(Payment).count() == 1
+    payload = {"id": "evt_123", "type": "payment_intent.succeeded"}
+
+    with stubber:
+        res = process.handler({"Records": [{"messageId": "m1", "body": json.dumps(payload)}]}, None)
+        assert res["batchItemFailures"] == []
