@@ -14,7 +14,22 @@ sqs = boto3.client("sqs")
 def get_cfg():
     """Load required settings at runtime, with safe defaults for tests."""
     q = os.environ.get("QUEUE_URL")                     # required in real runs
-    s = os.environ.get("STRIPE_WEBHOOK_SECRET", "test_secret")
+    
+    # s = os.environ.get("STRIPE_WEBHOOK_SECRET", "test_secret")
+    # Get the secret from Secrets Manager
+    secrets_client = boto3.client('secretsmanager')
+    secret_arn = os.environ['SECRET_ARN']
+    
+    try:
+        response = secrets_client.get_secret_value(SecretId=secret_arn)
+        s = response['SecretString']
+    except Exception as e:
+        print(f"Error retrieving secret: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': 'Failed to retrieve webhook secret'})
+        }
+    
     if q is None:
         # Avoid import-time KeyError; raise a clear runtime error instead.
         raise RuntimeError("Missing required env var: QUEUE_URL")

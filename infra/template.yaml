@@ -7,6 +7,11 @@ Parameters:
     Type: String
     Default: staging
 
+  StripeWebhookSecretValue:
+    Type: String
+    NoEcho: true
+    Description: The actual Stripe webhook secret value
+
 Globals:
   Function:
     Runtime: python3.13
@@ -58,11 +63,40 @@ Resources:
             ProjectionType: INCLUDE
             NonKeyAttributes: [status, type]
 
+  StripeWebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: stripe-webhook-secret
+      Description: Stripe webhook secret for validation
+      SecretString: !Ref StripeWebhookSecretValue
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref StripeWebhookSecret
+
   IngestFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/handlers/
-      Handler: ingest.handler
+      CodeUri: ..
+      Handler: src.handlers.ingest.handler
       Policies:
         - SQSSendMessagePolicy:
             QueueName: !GetAtt EventsQueue.QueueName
@@ -71,7 +105,8 @@ Resources:
       Environment:
         Variables:
           QUEUE_URL: !Ref EventsQueue    # Ref on SQS returns QueueUrl
-          STRIPE_WEBHOOK_SECRET: !Sub '{{resolve:ssm:/app/${Stage}/STRIPE_SECRET:1}}'
+          SECRET_ARN: !Ref StripeWebhookSecret  # Remove the problematic STRIPE_WEBHOOK_SECRET line
+          
       Events:
         Webhook:
           Type: Api
@@ -82,8 +117,8 @@ Resources:
   ProcessFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/handlers/
-      Handler: process.handler
+      CodeUri: ..
+      Handler: src.handlers.process.handler
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref EventsTable
@@ -101,3 +136,6 @@ Outputs:
   ApiEndpoint:
     Description: Invoke URL for POST /webhook
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook'
+  SecretArn:
+    Description: ARN of the Stripe webhook secret
+    Value: !Ref StripeWebhookSecret
