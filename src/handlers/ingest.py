@@ -6,7 +6,7 @@ import json
 import os
 import time
 import boto3
-from src.utils.logging import log  # structured logger (JSON)
+from src.utils.logging import log, scrub  # structured logger (JSON)
 
 # Clients
 _sqs = boto3.client("sqs")
@@ -15,6 +15,10 @@ _sm  = boto3.client("secretsmanager")
 # Cache the secret across invocations
 _SECRET_CACHE = None
 _TOLERANCE_SECONDS = 300  # 5 minutes
+
+STAGE = os.environ.get("STAGE", "staging")
+IS_VERBOSE = (STAGE != "prod") or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
+
 
 def _get_secret() -> str:
     """
@@ -106,11 +110,37 @@ def handler(event, context):
         )
         return {"statusCode": 401, "body": "bad signature"}
 
+    body_str = event.get("body", "")  
+    if event.get("isBase64Encoded"):
+        body_str =body_bytes.decode("utf-8"),
+
+    # staging-only verbose log (no 'evt' required)
+    if IS_VERBOSE:
+        try:
+            payload = json.loads(body_str) if body_str else {}
+        except Exception:
+            payload = {}
+
+        obj = (payload.get("data") or {}).get("object") or {}
+        order_id = (obj.get("metadata") or {}).get("order_id")
+        payment_id = obj.get("id")
+        log(
+            "debug",
+            "ingest_enqueued",
+            eventId=payload.get("id"),
+            type=payload.get("type"),
+            orderId=order_id,
+            paymentId=payment_id,
+            sqsMessageId=event.get("MessageId"),
+            queue=os.environ["QUEUE_URL"],
+            payload_preview=scrub(payload),   # uses the scrubber we added
+        )
+
     # Enqueue raw payload
     try:
         resp = _sqs.send_message(
             QueueUrl=os.environ["QUEUE_URL"],
-            MessageBody=body_bytes.decode("utf-8"),
+            MessageBody=body_str,
         )
         log(
             "info",

@@ -4,9 +4,11 @@ import os
 import time
 import boto3
 from botocore.exceptions import ClientError
-from src.utils.logging import log
+from src.utils.logging import log, scrub
 
 ddb = boto3.client("dynamodb")
+
+IS_VERBOSE = os.environ.get("STAGE") != "prod" or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
 
 # env (must be set by Lambda / tests before import)
 EVENTS_TABLE   = os.environ["EVENTS_TABLE"]   # idempotency + raw event marker
@@ -108,6 +110,15 @@ def handler(event, context):
         try:
             payload = json.loads(rec["body"])
 
+            if IS_VERBOSE:
+                obj = (payload.get("data") or {}).get("object") or {}
+                log("debug", "process_dequeued",
+                    messageId=mid, eventId=payload.get("id"), type=payload.get("type"),
+                    orderId=(obj.get("metadata") or {}).get("order_id"),
+                    paymentId=obj.get("id"),
+                    payload_preview=scrub(payload))
+
+
             # idempotency: skip duplicates without failing the batch item
             try:
                 _mark_processed_once(payload)
@@ -120,6 +131,9 @@ def handler(event, context):
 
             # business logic
             apply_event(payload)
+
+            if IS_VERBOSE:
+                log("debug", "process_applied", messageId=mid, eventId=payload.get("id"))
 
         except Exception as e:
             log("error", "process_failed", messageId=mid, error=str(e))
