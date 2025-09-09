@@ -13,7 +13,7 @@ def test_process_partial_batch_with_stubber(monkeypatch):
         "update_item",
         service_response={},
         expected_params={
-            "TableName": process.TABLE_NAME,
+            "TableName": process.EVENTS_TABLE,
             "Key": {"eventId": {"S": "ok"}},
             "UpdateExpression": (
                 "SET #s = :s, processedAt = :t, #type = :type, "

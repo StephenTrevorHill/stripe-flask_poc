@@ -118,3 +118,33 @@ Your Setup Summary
 │   ├── 
 
 ```
+## 2025-09-08
+- created a secrets manager secret called stripe-webhook-secret arn=arn:aws:secretsmanager:us-east-1:062250062530:secret:stripe-webhook-secret-w06cRv
+- changed the ingestion handler code to use that - committed and pushed
+- updated the template
+- successfully deployed
+- lambda for ingestion:
+    - arn: arn:aws:lambda:us-east-1:062250062530:function:webhook-staging-IngestFunction-KcQD0lMrqAJO
+    - url: https://o35zpdj6cd.execute-api.us-east-1.amazonaws.com/Prod/webhook
+- created stripe event destination
+    - secret: whsec_upxvaOjV3qx2Wm18cIomAej7hLdsTx7j
+- updated secret in AWS
+    - aws secretsmanager update-secret --secret-id stripe-webhook-secret --secret-string whsec_xxxxx
+        {
+        "ARN": "arn:aws:secretsmanager:us-east-1:062250062530:secret:stripe-webhook-secret-w06cRv",
+        "Name": "stripe-webhook-secret",
+        "VersionId": "61c6e891-5f41-499e-a6b5-ffa75ff3f0b5"
+        }   
+- first run failed - added permissions to the role
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "secretsmanager:GetSecretValue",
+                "Resource": "arn:aws:secretsmanager:us-east-1:062250062530:secret:stripe-webhook-secret-w06cRv"
+            }
+        ]
+    }
+
+

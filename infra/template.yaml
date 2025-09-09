@@ -5,12 +5,11 @@ Description: Lambda → SQS → Lambda with DynamoDB (staging/prod) – free tie
 Parameters:
   Stage:
     Type: String
+    AllowedValues: [staging, prod]
     Default: staging
 
-  StripeWebhookSecretValue:
-    Type: String
-    NoEcho: true
-    Description: The actual Stripe webhook secret value
+Conditions:
+  IsStaging: !Equals [!Ref Stage, "staging"]
 
 Globals:
   Function:
@@ -20,7 +19,7 @@ Globals:
     Environment:
       Variables:
         STAGE: !Ref Stage
-        TABLE_NAME: !Ref EventsTable
+    Tracing: Active
 
 Resources:
   EventsDLQ:
@@ -32,7 +31,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub events-${Stage}
-      VisibilityTimeout: 90            # ≈ 6× processor Lambda timeout (15s)
+      VisibilityTimeout: 90            
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt EventsDLQ.Arn
         maxReceiveCount: 5
@@ -40,57 +39,47 @@ Resources:
   EventsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub events-${Stage}
+      TableName: !Sub "events-${Stage}"
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: eventId
           AttributeType: S
-        - AttributeName: tenantId
-          AttributeType: S
-        - AttributeName: createdAt
-          AttributeType: S
       KeySchema:
         - AttributeName: eventId
           KeyType: HASH
+
+  PaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "payments-${Stage}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: paymentId
+          AttributeType: S
+        - AttributeName: orderId         # for a simple query-by-order GSI
+          AttributeType: S
+      KeySchema:
+        - AttributeName: paymentId
+          KeyType: HASH
       GlobalSecondaryIndexes:
-        - IndexName: GSI1_TenantCreatedAt
+        - IndexName: byOrder
           KeySchema:
-            - AttributeName: tenantId
+            - AttributeName: orderId
               KeyType: HASH
-            - AttributeName: createdAt
-              KeyType: RANGE
           Projection:
-            ProjectionType: INCLUDE
-            NonKeyAttributes: [status, type]
+            ProjectionType: ALL
 
-  StripeWebhookSecret:
-    Type: AWS::SecretsManager::Secret
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      Name: stripe-webhook-secret
-      Description: Stripe webhook secret for validation
-      SecretString: !Ref StripeWebhookSecretValue
-
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: SecretsManagerAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Ref StripeWebhookSecret
+      TableName: !Sub "orders-${Stage}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
 
   IngestFunction:
     Type: AWS::Serverless::Function
@@ -99,16 +88,16 @@ Resources:
       Handler: src.handlers.ingest.handler
       Policies:
         - SQSSendMessagePolicy:
-            QueueName: !GetAtt EventsQueue.QueueName
-        - DynamoDBCrudPolicy:
-            TableName: !Ref EventsTable
+            QueueName: !Sub "events-${Stage}"
+        - SecretsManagerReadPolicy:
+            SecretArn: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:stripe/webhook/${Stage}-*"
       Environment:
         Variables:
-          QUEUE_URL: !Ref EventsQueue    # Ref on SQS returns QueueUrl
-          SECRET_ARN: !Ref StripeWebhookSecret  # Remove the problematic STRIPE_WEBHOOK_SECRET line
-          
+          QUEUE_URL: !Ref EventsQueue
+          STRIPE_SECRET_ID: !Sub "stripe/webhook/${Stage}"
+          LOG_LEVEL: !If [IsStaging, "DEBUG", "INFO"]
       Events:
-        Webhook:
+        Api:
           Type: Api
           Properties:
             Path: /webhook
@@ -120,22 +109,28 @@ Resources:
       CodeUri: ..
       Handler: src.handlers.process.handler
       Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref EventsTable
+        - DynamoDBCrudPolicy: { TableName: !Ref EventsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref PaymentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref OrdersTable }
+      Environment:
+        Variables:
+          EVENTS_TABLE:   !Ref EventsTable
+          PAYMENTS_TABLE: !Ref PaymentsTable
+          ORDERS_TABLE:   !Ref OrdersTable
+          LOG_LEVEL: !If [IsStaging, "DEBUG", "INFO"]
       Events:
-        FromSQS:
+        Queue:
           Type: SQS
           Properties:
             Queue: !GetAtt EventsQueue.Arn
             BatchSize: 10
             MaximumBatchingWindowInSeconds: 1
             FunctionResponseTypes:
-              - ReportBatchItemFailures   # enable partial batch response
+              - ReportBatchItemFailures
 
 Outputs:
-  ApiEndpoint:
-    Description: Invoke URL for POST /webhook
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook'
-  SecretArn:
-    Description: ARN of the Stripe webhook secret
-    Value: !Ref StripeWebhookSecret
+  ApiUrl:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/webhook"
+  EventsTableName:   { Value: !Ref EventsTable }
+  PaymentsTableName: { Value: !Ref PaymentsTable }
+  OrdersTableName:   { Value: !Ref OrdersTable }

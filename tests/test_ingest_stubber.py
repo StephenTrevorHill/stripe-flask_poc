@@ -1,7 +1,11 @@
 # tests/test_ingest_stubber.py
-import os, json, hmac, hashlib, time
+import os
+import json
+import hmac
+import hashlib
+import time
 from botocore.stub import Stubber
-from src.handlers import ingest
+from src.handlers import ingest 
 
 def make_sig(payload: str, secret: str):
     t = str(int(time.time()))
@@ -16,7 +20,7 @@ def test_ingest_sends_only_sqs(monkeypatch):
     sig = make_sig(payload, os.environ["STRIPE_WEBHOOK_SECRET"])
 
     # Stub SQS send_message (the only AWS call now)
-    sqs_stubber = Stubber(ingest.sqs)
+    sqs_stubber = Stubber(ingest._sqs)
     sqs_stubber.add_response(
         "send_message",
         expected_params={

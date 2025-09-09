@@ -24,7 +24,7 @@ def test_ingest_signature_and_enqueue(monkeypatch):
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
 
     sqs = FakeSQS()
-    monkeypatch.setattr(ingest, "sqs", sqs)
+    monkeypatch.setattr(ingest, "_sqs", sqs)
 
     payload = json.dumps({"id": "evt_123", "created": 111, "data": {"object": {"account": "t_demo"}}})
     sig = make_sig(payload, os.environ["STRIPE_WEBHOOK_SECRET"])
@@ -40,7 +40,7 @@ def test_ingest_bad_signature(monkeypatch):
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_test"
 
     sqs = FakeSQS()
-    monkeypatch.setattr(ingest, "sqs", sqs)
+    monkeypatch.setattr(ingest, "_sqs", sqs)
 
     payload = json.dumps({"id": "evt_123"})
     event = {"body": payload, "headers": {"Stripe-Signature": "t=0,v1=bad"}}

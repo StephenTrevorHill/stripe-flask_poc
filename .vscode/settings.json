@@ -1,0 +1,31 @@
+{
+  "yaml.schemas": {
+    "https://json.schemastore.org/cloudformation": [
+      "infra/template.yaml",
+      "template.y*ml",
+      "**/*.template.y*ml"
+    ]
+  },
+  "yaml.customTags": [
+    "!And sequence",
+    "!Base64 scalar",
+    "!Cidr sequence",
+    "!Condition scalar",
+    "!Equals sequence",
+    "!FindInMap sequence",
+    "!GetAZs scalar",
+    "!GetAtt sequence",
+    "!GetAtt scalar",
+    "!If sequence",
+    "!ImportValue scalar",
+    "!Join sequence",
+    "!Not sequence",
+    "!Or sequence",
+    "!Ref scalar",
+    "!Select sequence",
+    "!Split sequence",
+    "!Sub sequence",
+    "!Sub scalar"
+  ]
+}
+

@@ -1,8 +1,8 @@
 import json, os, time
 import boto3
 
-# Use a safe default for tests; Lambda will set TABLE_NAME in env
-TABLE_NAME = os.environ.get("TABLE_NAME", "events-staging")
+# Use a safe default for tests; Lambda will set EVENTS_TABLE in env
+TABLE_NAME = os.environ.get("EVENTS_TABLE", "events-staging")
 ddb = boto3.client("dynamodb")
 
 
@@ -184,7 +184,7 @@ def test_payment_intent_succeeded_updates_payment_and_order(monkeypatch):
         "update_item",
         service_response={},
         expected_params={
-            "TableName": process.TABLE_NAME,
+            "TableName": process.EVENTS_TABLE,
             "Key": {"eventId": {"S": "payment#pi_1"}},
             "UpdateExpression": "SET entity=:e, orderId=:o, paymentId=:p, #s=:s, amountCents=:amt, lastUpdatedAt=:t",
             "ExpressionAttributeNames": {"#s": "status"},
@@ -204,7 +204,7 @@ def test_payment_intent_succeeded_updates_payment_and_order(monkeypatch):
         "update_item",
         service_response={},
         expected_params={
-            "TableName": process.TABLE_NAME,
+            "TableName": process.PAYMENT_TABLE,
             "Key": {"eventId": {"S": "order#order_42"}},
             "UpdateExpression": "SET entity=:e, orderId=:o, lastUpdatedAt=:t ADD amountCents :d",
             "ExpressionAttributeValues": {
