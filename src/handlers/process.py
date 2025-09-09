@@ -82,8 +82,10 @@ def apply_event(payload: dict) -> None:
         amount = obj.get("amount_received", 0) or obj.get("amount", 0)
 
         _upsert_payment_summary(pi_id, order_id, "SUCCEEDED", amount)
-        _order_add_amount(order_id, "paid", amount)
-        log("info", "payment_succeeded", paymentId=pi_id, orderId=order_id, amount=amount)
+        received, total, status = _order_apply_payment(order_id, amount)
+        log("info", "payment_succeeded",
+            paymentId=pi_id, orderId=order_id, amount=amount,
+            orderTotal=total, amountReceived=received, orderStatus=status)
 
     elif etype == "payment_intent.payment_failed":
         obj = payload["data"]["object"]
@@ -124,3 +126,43 @@ def handler(event, context):
             failures.append({"itemIdentifier": mid})
 
     return {"batchItemFailures": failures}
+
+def _order_apply_payment(order_id: str, delta_cents: int):
+    """
+    Atomically add delta_cents to amountReceivedCents, then compute and set status.
+    Returns (received, total, status).
+    """
+    now = _now_s()
+
+    # 1) Increment and fetch the new snapshot
+    resp = ddb.update_item(
+        TableName=ORDERS_TABLE,
+        Key={"orderId": {"S": order_id}},
+        UpdateExpression="SET updatedAt=:t, createdAt=if_not_exists(createdAt, :t) ADD amountReceivedCents :d",
+        ExpressionAttributeValues={
+            ":t": {"S": now},
+            ":d": {"N": str(delta_cents)},
+        },
+        ReturnValues="ALL_NEW",
+    )
+
+    attrs = resp.get("Attributes", {})
+    received = int(attrs.get("amountReceivedCents", {}).get("N", "0"))
+    total = int(attrs.get("orderTotalCents", {}).get("N", "0"))
+
+    if total > 0:
+        status = "paid" if received >= total else "partial"
+    else:
+        # No total yet → we can’t decide paid/partial; consider this pending
+        status = "pending"
+
+    # 2) Set status (idempotent)
+    ddb.update_item(
+        TableName=ORDERS_TABLE,
+        Key={"orderId": {"S": order_id}},
+        UpdateExpression="SET #s=:s, updatedAt=:t",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": {"S": status}, ":t": {"S": now}},
+    )
+
+    return received, total, status
