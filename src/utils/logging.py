@@ -1,70 +1,27 @@
+# src/utils/logging.py
 import json
-import logging
 import os
 import sys
 import time
 
-_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+_STAGE = os.environ.get("STAGE", "dev")
+_REDACT = {"authorization", "stripe-signature", "secret", "password", "token", "api_key", "apikey", "x-api-key"}
 
-class JsonFormatter(logging.Formatter):
-    def format(self, record):
-        base = {
-            "time": int(time.time()),
-            "level": record.levelname,
-            "msg": record.getMessage(),
-            "logger": record.name,
-            "stage": os.getenv("STAGE", "dev"),
-        }
-        # carry arbitrary context via "extra"
-        extra = getattr(record, "extra", None)
-        if extra and isinstance(extra, dict):
-            base.update(extra)
-        return json.dumps(base)
+def _now_s() -> int:
+    return int(time.time())
 
-_handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(JsonFormatter())
-
-logger = logging.getLogger("app")
-logger.setLevel(_LEVEL)
-logger.handlers = [_handler]
-logger.propagate = False
-
-def log(level, msg, **ctx):
-    logger.log(getattr(logging, level.upper()), msg, extra={"extra": ctx})
-
-# --- add to src/utils/logging.py ---
-SENSITIVE_KEYS = {
-    "client_secret", "api_key", "authorization", "password",
-    "email", "phone", "address", "name", "token"
-}
-
-def _scrub_value(v):
-    if isinstance(v, str):
-        # redact obvious secrets in strings
-        if v.startswith("whsec_") or v.startswith("sk_"):
-            return "[REDACTED]"
-        # cap huge strings to keep log lines small
-        return v[:2000]
+def scrub(v, redacted="***"):
+    if isinstance(v, dict):
+        return {k: (redacted if k.lower() in _REDACT else scrub(val, redacted)) for k, val in v.items()}
+    if isinstance(v, list):
+        return [scrub(x, redacted) for x in v]
     return v
 
-def scrub(obj, max_len=3500):
-    """
-    Recursively redact sensitive fields and trim size.
-    Returns a JSON-safe structure (no pretty-print).
-    """
+def log(level: str, msg: str, **fields):
+    payload = {"time": _now_s(), "level": level.upper(), "msg": msg, "logger": "app", "stage": _STAGE}
+    payload.update(fields)
     try:
-        if isinstance(obj, dict):
-            out = {}
-            for k, v in obj.items():
-                kl = str(k).lower()
-                if kl in SENSITIVE_KEYS or "secret" in kl or "token" in kl:
-                    out[k] = "[REDACTED]"
-                else:
-                    out[k] = scrub(v, max_len)
-            return out
-        if isinstance(obj, list):
-            return [scrub(x, max_len) for x in obj][:50]  # avoid giant arrays
-        return _scrub_value(obj)
-    finally:
-        # We keep total log payload small by trimming later at callsite (see payload_preview)
-        pass
+        print(json.dumps(payload, separators=(",", ":")), file=sys.stdout, flush=True)
+    except Exception:
+        # last-ditch: at least print something
+        print(f"{payload}", file=sys.stdout, flush=True)

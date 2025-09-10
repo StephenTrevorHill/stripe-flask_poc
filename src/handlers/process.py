@@ -105,6 +105,8 @@ def apply_event(payload: dict) -> None:
 def handler(event, context):
     failures = []
 
+    log("debug", "this_is_debug", extra={"ctx": {"sample": True}})
+
     for rec in event.get("Records", []):
         mid = rec.get("messageId")
         try:
@@ -118,6 +120,11 @@ def handler(event, context):
                     paymentId=obj.get("id"),
                     payload_preview=scrub(payload))
 
+            # test hook: force a failure if metadata.force_fail=1
+            obj = (payload.get("data") or {}).get("object") or {}
+            meta = obj.get("metadata") or {}
+            if meta.get("force_fail") == "1":
+                raise RuntimeError("forced failure for DLQ test")
 
             # idempotency: skip duplicates without failing the batch item
             try:

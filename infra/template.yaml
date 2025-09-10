@@ -7,10 +7,16 @@ Parameters:
     Type: String
     AllowedValues: [staging, prod]
     Default: staging
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: "Email for DLQ alarm notifications (optional). Leave blank to skip."
+
 
 Conditions:
   IsStaging: !Equals [!Ref Stage, "staging"]
-
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+  
 Globals:
   Function:
     Runtime: python3.13
@@ -22,10 +28,13 @@ Globals:
     Tracing: Active
 
 Resources:
+# --- SWD-6: Dead-letter queue for events ---
   EventsDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub events-${Stage}-dlq
+      QueueName: !Sub "events-${Stage}-dlq"
+      # Keep failed messages for the max 14 days so you've got time to inspect
+      MessageRetentionPeriod: 1209600
 
   EventsQueue:
     Type: AWS::SQS::Queue
@@ -128,9 +137,51 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      TopicName: !Sub "webhook-${Stage}-alerts"
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      Endpoint: !Ref AlarmEmail
+      Protocol: email
+      TopicArn: !Ref AlertsTopic
+
+  DLQHasMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "webhook-${Stage}-dlq-has-messages"
+      AlarmDescription: !Sub "Messages reached ${Stage} DLQ — check ProcessFunction failures"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EventsDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlertsTopic], !Ref "AWS::NoValue"]
+
 Outputs:
   ApiUrl:
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/webhook"
   EventsTableName:   { Value: !Ref EventsTable }
   PaymentsTableName: { Value: !Ref PaymentsTable }
   OrdersTableName:   { Value: !Ref OrdersTable }
+  EventsDLQUrl:
+    Value: !Ref EventsDLQ
+    Description: "DLQ URL"
+  EventsDLQArn:
+    Value: !GetAtt EventsDLQ.Arn
+    Description: "DLQ ARN"
+  DLQAlarmName:
+    Value: !Ref DLQHasMessagesAlarm
+    Description: "DLQ CloudWatch Alarm"
