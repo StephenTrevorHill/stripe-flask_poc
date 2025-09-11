@@ -1,0 +1,183 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 3,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [
+            "AWS/SQS",
+            "ApproximateNumberOfMessagesVisible",
+            "QueueName",
+            "events-staging"
+          ],
+          [
+            ".",
+            ".",
+            ".",
+            "events-staging-dlq"
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "title": "Messages Available in Queue",
+        "period": 60,
+        "stat": "Average",
+        "yAxis": {
+          "left": {
+            "min": 0
+          }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [
+            "AWS/SQS",
+            "ApproximateNumberOfMessagesNotVisible",
+            "QueueName",
+            "events-staging"
+          ],
+          [
+            ".",
+            ".",
+            ".",
+            "events-staging-dlq"
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "title": "Messages In-Flight (Being Processed)",
+        "period": 60,
+        "stat": "Average"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 9,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [
+            "AWS/SQS",
+            "NumberOfMessagesSent",
+            "QueueName",
+            "events-staging"
+          ],
+          [
+            ".",
+            "NumberOfMessagesReceived",
+            ".",
+            "."
+          ],
+          [
+            ".",
+            "NumberOfMessagesDeleted",
+            ".",
+            "."
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "title": "Message Flow - events-staging",
+        "period": 300,
+        "stat": "Sum"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 6,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [
+            "AWS/SQS",
+            "ApproximateAgeOfOldestMessage",
+            "QueueName",
+            "events-staging",
+            {
+              "id": "m1",
+              "visible": false
+            }
+          ],
+          [
+            ".",
+            ".",
+            ".",
+            "events-staging-dlq",
+            {
+              "id": "m2",
+              "visible": false
+            }
+          ],
+          [
+            {
+              "expression": "m1/60",
+              "label": "events-staging (minutes)",
+              "id": "e1"
+            }
+          ],
+          [
+            {
+              "expression": "m2/60",
+              "label": "events-staging-dlq (minutes)",
+              "id": "e2"
+            }
+          ]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-east-1",
+        "title": "Age of Oldest Message (minutes)",
+        "period": 300,
+        "stat": "Maximum",
+        "yAxis": {
+          "left": {
+            "min": 0,
+            "label": "Age (minutes)"
+          }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 3,
+      "properties": {
+        "sparkline": true,
+        "view": "singleValue",
+        "metrics": [
+          [
+            "AWS/SQS",
+            "ApproximateNumberOfMessagesVisible",
+            "QueueName",
+            "events-staging"
+          ],
+          [
+            "...",
+            "events-staging-dlq"
+          ]
+        ],
+        "region": "us-east-1"
+      }
+    }
+  ]
+}
