@@ -20,3 +20,4 @@ def _env(monkeypatch):
     monkeypatch.setenv("EVENTS_TABLE", "events-staging")
     monkeypatch.setenv("PAYMENTS_TABLE", "payments-staging")
     monkeypatch.setenv("ORDERS_TABLE", "orders-staging")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")

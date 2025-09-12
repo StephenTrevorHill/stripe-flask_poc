@@ -6,7 +6,7 @@ import json
 import os
 import time
 import boto3
-from src.utils.logging import log, scrub  # structured logger (JSON)
+from src.utils.logging import debug, info, warn, error, scrub, is_debug_enabled  # structured logger (JSON)
 
 # Clients
 _sqs = boto3.client("sqs")
@@ -17,7 +17,6 @@ _SECRET_CACHE = None
 _TOLERANCE_SECONDS = 300  # 5 minutes
 
 STAGE = os.environ.get("STAGE", "staging")
-IS_VERBOSE = (STAGE != "prod") or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
 
 
 def _get_secret() -> str:
@@ -96,13 +95,12 @@ def handler(event, context):
     try:
         secret = _get_secret()
     except Exception as e:
-        log("error", "secret_resolve_failed", requestId=request_id, error=str(e))
+        error( "secret_resolve_failed", requestId=request_id, error=str(e))
         return {"statusCode": 500, "body": json.dumps({"ok": False})}
 
     # Verify signature
     if not verify_stripe_signature(body_bytes, sig, secret):
-        log(
-            "warn",
+        warn(
             "bad_signature",
             requestId=request_id,
             contentLength=len(body_bytes),
@@ -115,7 +113,7 @@ def handler(event, context):
         body_str =body_bytes.decode("utf-8"),
 
     # staging-only verbose log (no 'evt' required)
-    if IS_VERBOSE:
+    if is_debug_enabled():
         try:
             payload = json.loads(body_str) if body_str else {}
         except Exception:
@@ -124,8 +122,7 @@ def handler(event, context):
         obj = (payload.get("data") or {}).get("object") or {}
         order_id = (obj.get("metadata") or {}).get("order_id")
         payment_id = obj.get("id")
-        log(
-            "debug",
+        debug(
             "ingest_enqueued",
             eventId=payload.get("id"),
             type=payload.get("type"),
@@ -142,8 +139,7 @@ def handler(event, context):
             QueueUrl=os.environ["QUEUE_URL"],
             MessageBody=body_str,
         )
-        log(
-            "info",
+        info(
             "ingest_enqueued",
             requestId=request_id,
             contentLength=len(body_bytes),
@@ -152,5 +148,5 @@ def handler(event, context):
         return {"statusCode": 200, "body": json.dumps({"ok": True})}
     except Exception as e:
         # Let Stripe retry if we couldn't enqueue
-        log("error", "enqueue_failed", requestId=request_id, error=str(e))
+        error( "enqueue_failed", requestId=request_id, error=str(e))
         return {"statusCode": 500, "body": json.dumps({"ok": False})}

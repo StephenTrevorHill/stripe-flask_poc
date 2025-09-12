@@ -4,11 +4,11 @@ import os
 import time
 import boto3
 from botocore.exceptions import ClientError
-from src.utils.logging import log, scrub
+from src.utils.logging import debug, info, warn, error , scrub, is_debug_enabled  # structured logger (JSON)
 
 ddb = boto3.client("dynamodb")
 
-IS_VERBOSE = os.environ.get("STAGE") != "prod" or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
+# IS_VERBOSE = os.environ.get("STAGE") != "prod" or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
 
 # env (must be set by Lambda / tests before import)
 EVENTS_TABLE   = os.environ["EVENTS_TABLE"]   # idempotency + raw event marker
@@ -85,7 +85,7 @@ def apply_event(payload: dict) -> None:
 
         _upsert_payment_summary(pi_id, order_id, "SUCCEEDED", amount)
         received, total, status = _order_apply_payment(order_id, amount)
-        log("info", "payment_succeeded",
+        info( "payment_succeeded",
             paymentId=pi_id, orderId=order_id, amount=amount,
             orderTotal=total, amountReceived=received, orderStatus=status)
 
@@ -96,25 +96,25 @@ def apply_event(payload: dict) -> None:
 
         _upsert_payment_summary(pi_id, order_id, "FAILED", 0)
         _order_add_amount(order_id, "unpaid", 0)
-        log("warn", "payment_failed", paymentId=pi_id, orderId=order_id)
+        warn( "payment_failed", paymentId=pi_id, orderId=order_id)
 
     else:
         # Unknown/ignored event types are a no-op
-        log("debug", "event_ignored", type=etype, eventId=payload.get("id"))
+        debug( "event_ignored", type=etype, eventId=payload.get("id"))
 
 def handler(event, context):
     failures = []
 
-    log("debug", "this_is_debug", extra={"ctx": {"sample": True}})
+    debug(  "this_is_debug", extra={"ctx": {"sample": True}})
 
     for rec in event.get("Records", []):
         mid = rec.get("messageId")
         try:
             payload = json.loads(rec["body"])
 
-            if IS_VERBOSE:
+            if is_debug_enabled(): # only do expensive schema build if needed
                 obj = (payload.get("data") or {}).get("object") or {}
-                log("debug", "process_dequeued",
+                debug( "process_dequeued",
                     messageId=mid, eventId=payload.get("id"), type=payload.get("type"),
                     orderId=(obj.get("metadata") or {}).get("order_id"),
                     paymentId=obj.get("id"),
@@ -132,18 +132,17 @@ def handler(event, context):
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code")
                 if code == "ConditionalCheckFailedException":
-                    log("info", "duplicate_event_skipped", messageId=mid, eventId=payload.get("id"))
+                    info( "duplicate_event_skipped", messageId=mid, eventId=payload.get("id"))
                     continue
                 raise
 
             # business logic
             apply_event(payload)
 
-            if IS_VERBOSE:
-                log("debug", "process_applied", messageId=mid, eventId=payload.get("id"))
+            debug( "process_applied", messageId=mid, eventId=payload.get("id"))
 
         except Exception as e:
-            log("error", "process_failed", messageId=mid, error=str(e))
+            error( "process_failed", messageId=mid, error=str(e))
             failures.append({"itemIdentifier": mid})
 
     return {"batchItemFailures": failures}

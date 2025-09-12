@@ -3,12 +3,13 @@ import json
 from botocore.stub import Stubber, ANY
 from botocore.exceptions import ClientError  # noqa: F401
 
+
 import os
 os.environ.setdefault("EVENTS_TABLE", "events-staging")
 os.environ.setdefault("PAYMENTS_TABLE", "payments-staging")
 os.environ.setdefault("ORDERS_TABLE", "orders-staging")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-
+os.environ.setdefault("LOG_LEVEL", "DEBUG")
 
 class Boom(Exception):
     pass
@@ -82,22 +83,44 @@ def test_payment_intent_succeeded_updates_payment_and_order(monkeypatch):
         },
     )
 
-    # 3) Order bump in ORDERS_TABLE (key: orderId)
+    # 3a) Order bump (ADD amountReceivedCents ... ReturnValues=ALL_NEW)
+    stubber.add_response(
+        "update_item",
+        service_response={
+            # The handler reads these to compute status
+            "Attributes": {
+                "amountReceivedCents": {"N": "5000"},
+                "orderTotalCents": {"N": "5000"},  # make total==received so status -> "paid"
+            }
+        },
+        expected_params={
+            "TableName": process.ORDERS_TABLE,
+            "Key": {"orderId": {"S": "order_42"}},
+            "UpdateExpression": ANY,  # e.g., "SET updatedAt=:t, createdAt=if_not_exists(createdAt, :t) ADD amountReceivedCents :d"
+            "ExpressionAttributeValues": {
+                ":t": {"S": "1700000000"},
+                ":d": {"N": "5000"},
+            },
+            "ReturnValues": "ALL_NEW",
+        },
+    )
+
+    # 3b) Status set based on snapshot (paid/partial/pending)
     stubber.add_response(
         "update_item",
         service_response={},
         expected_params={
             "TableName": process.ORDERS_TABLE,
             "Key": {"orderId": {"S": "order_42"}},
-            "UpdateExpression": ANY,
+            "UpdateExpression": ANY,  # "SET #s=:s, updatedAt=:t"
             "ExpressionAttributeNames": {"#s": "status"},
             "ExpressionAttributeValues": {
                 ":s": {"S": "paid"},
                 ":t": {"S": "1700000000"},
-                ":d": {"N": "5000"},
             },
         },
     )
+    
 
     payload = {
         "id": "evt_123",
